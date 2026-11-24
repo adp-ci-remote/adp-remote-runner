@@ -1,0 +1,77 @@
+# The remote tier's runner (#51's design, The runner repository). The
+# one-time setup copies this file into the runner repository as
+# .github/workflows/adp-runner.yml; see README.md next to it. It is fixed:
+# everything that changes with ADP is in adp-remote, run from the commit
+# under test.
+name: adp-runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: The home repository's commit under test
+        required: true
+      check_runs:
+        description: Each suite and its check run's id on the commit, such as contract=12
+        required: true
+
+permissions: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      COMMIT: ${{ inputs.commit }}
+      CHECK_RUNS: ${{ inputs.check_runs }}
+      ADP_HOME_REPO: ${{ vars.ADP_HOME_REPO }}
+      ADP_HOME_PATH: ${{ vars.ADP_HOME_PATH }}
+      ADP_RUNNER_APP_ID: ${{ vars.ADP_RUNNER_APP_ID }}
+      ADP_DISPATCH_APP_ID: ${{ vars.ADP_DISPATCH_APP_ID }}
+      ADP_ASSIGNEES: ${{ vars.ADP_ASSIGNEES }}
+      ADP_THROWAWAY_VISIBILITY: ${{ vars.ADP_THROWAWAY_VISIBILITY }}
+    steps:
+      - name: Split ADP_HOME_REPO
+        id: home
+        run: |
+          case "$ADP_HOME_REPO" in
+            */*) ;;
+            *) echo "ADP_HOME_REPO is \"$ADP_HOME_REPO\", not owner/name"; exit 1 ;;
+          esac
+          echo "owner=${ADP_HOME_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${ADP_HOME_REPO#*/}" >> "$GITHUB_OUTPUT"
+      # The home repository may be private: check it out with the dispatch
+      # App's token, which can read it.
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        id: token
+        with:
+          app-id: ${{ vars.ADP_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.ADP_DISPATCH_APP_KEY }}
+          owner: ${{ steps.home.outputs.owner }}
+          repositories: ${{ steps.home.outputs.name }}
+          permission-contents: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.ADP_HOME_REPO }}
+          ref: ${{ inputs.commit }}
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ vars.ADP_HOME_PATH }}/go.mod
+          cache-dependency-path: ${{ vars.ADP_HOME_PATH }}/go.sum
+      - name: adp-remote run
+        working-directory: ${{ vars.ADP_HOME_PATH }}
+        env:
+          ADP_RUNNER_APP_KEY: ${{ secrets.ADP_RUNNER_APP_KEY }}
+          ADP_DISPATCH_APP_KEY: ${{ secrets.ADP_DISPATCH_APP_KEY }}
+        run: go run ./cmd/adp-remote run --commit "$COMMIT" --check-runs "$CHECK_RUNS"
+      # Always, even after a timeout or a cancel: deletes the run's
+      # repository if it remains, and completes any check left open.
+      - name: adp-remote finish
+        if: always()
+        working-directory: ${{ vars.ADP_HOME_PATH }}
+        env:
+          ADP_RUNNER_APP_KEY: ${{ secrets.ADP_RUNNER_APP_KEY }}
+          ADP_DISPATCH_APP_KEY: ${{ secrets.ADP_DISPATCH_APP_KEY }}
+        run: go run ./cmd/adp-remote finish --commit "$COMMIT" --check-runs "$CHECK_RUNS"
