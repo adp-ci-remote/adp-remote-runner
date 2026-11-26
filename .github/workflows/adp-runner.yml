@@ -2,7 +2,8 @@
 # one-time setup copies this file into the runner repository as
 # .github/workflows/adp-runner.yml; see README.md next to it. It is fixed:
 # everything that changes with ADP is in adp-remote, run from the commit
-# under test.
+# under test. A dispatch with sweep runs the sweep instead of a run, from
+# the commit given, and has no checks.
 name: adp-runner
 
 on:
@@ -12,8 +13,14 @@ on:
         description: The home repository's commit under test
         required: true
       check_runs:
-        description: Each suite and its check run's id on the commit, such as contract=12
-        required: true
+        description: Each suite and its check run's id on the commit, such as contract=12; empty for a sweep
+        required: false
+        default: ""
+      sweep:
+        description: Run the sweep, which deletes marked repositories left behind, instead of the suites
+        type: boolean
+        required: false
+        default: false
 
 permissions: {}
 
@@ -61,6 +68,7 @@ jobs:
           go-version-file: ${{ vars.ADP_HOME_PATH }}/go.mod
           cache-dependency-path: ${{ vars.ADP_HOME_PATH }}/go.sum
       - name: adp-remote run
+        if: ${{ !inputs.sweep }}
         working-directory: ${{ vars.ADP_HOME_PATH }}
         env:
           ADP_RUNNER_APP_KEY: ${{ secrets.ADP_RUNNER_APP_KEY }}
@@ -69,9 +77,16 @@ jobs:
       # Always, even after a timeout or a cancel: deletes the run's
       # repository if it remains, and completes any check left open.
       - name: adp-remote finish
-        if: always()
+        if: ${{ always() && !inputs.sweep }}
         working-directory: ${{ vars.ADP_HOME_PATH }}
         env:
           ADP_RUNNER_APP_KEY: ${{ secrets.ADP_RUNNER_APP_KEY }}
           ADP_DISPATCH_APP_KEY: ${{ secrets.ADP_DISPATCH_APP_KEY }}
         run: go run ./cmd/adp-remote finish --commit "$COMMIT" --check-runs "$CHECK_RUNS"
+      - name: adp-remote sweep
+        if: ${{ inputs.sweep }}
+        working-directory: ${{ vars.ADP_HOME_PATH }}
+        env:
+          ADP_RUNNER_APP_KEY: ${{ secrets.ADP_RUNNER_APP_KEY }}
+          ADP_DISPATCH_APP_KEY: ${{ secrets.ADP_DISPATCH_APP_KEY }}
+        run: go run ./cmd/adp-remote sweep
